@@ -5,7 +5,7 @@ from src.state import GraphState, VideoIntent
 
 load_dotenv()
 
-def prompt_parser_node(state: GraphState) -> dict:
+def parser_node(state: GraphState) -> dict:
     """
     Parses the raw user prompt into a structured format containing
     pacing, visual style, caption tone, and transition preferences using Groq.
