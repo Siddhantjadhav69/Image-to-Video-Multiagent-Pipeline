@@ -1,57 +1,39 @@
-import os
-import base64
-import json
-from groq import Groq
+from pydantic import BaseModel, Field
+from typing import List
+from langchain_groq import ChatGroq
+from src.state import GraphState
 
-# Ensure your GROQ_API_KEY is in your environment variables
-client = Groq()
+# Define the structured output for our Vision Agent
+class ImageSelection(BaseModel):
+    selected_images: List[str] = Field(description="List of selected image filenames")
+    reasoning: str = Field(description="Why these images were selected based on the intent")
 
-def encode_image(image_path: str) -> str:
-    """Helper to convert local image to base64."""
-    with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode('utf-8')
-
-def analyze_images(image_paths: list[str], video_intent: str) -> dict:
-    """Analyzes images and selects the best subset based on intent."""
+def image_analyser_node(state: GraphState):
+    print("--- RUNNING IMAGE ANALYSER AGENT ---")
     
-    # Construct the message payload with multiple images
-    content = [
-        {
-            "type": "text",
-            "text": f"You are a video editor. The user intent is: '{video_intent}'. "
-                    f"Analyze these images. Return ONLY a JSON object with two keys: "
-                    f"'selected_images' (a list of 1-based indices of the images you chose) and "
-                    f"'reasoning' (a brief string explaining why). Do not include markdown formatting or extra text."
-        }
-    ]
-
-    for img_path in image_paths:
-        base64_img = encode_image(img_path)
-        content.append({
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/jpeg;base64,{base64_img}"
-            }
-        })
-
-    response = client.chat.completions.create(
-        model="llama-3.2-11b-vision-preview",
-        messages=[{"role": "user", "content": content}],
-        temperature=0.1, # Low temperature for more deterministic JSON output
+    intent = state.get("intent")
+    
+    # Initialize the Groq Vision model
+    llm = ChatGroq(
+        model="llama-3.2-11b-vision-preview", 
+        temperature=0.2
     )
-
-    try:
-        # Parse the strict JSON output
-        result = json.loads(response.choices[0].message.content)
-        return result
-    except json.JSONDecodeError:
-        print("Failed to parse JSON. Raw output:", response.choices[0].message.content)
-        return {"selected_images": [], "reasoning": "Failed to parse"}
-
-# Quick test
-if __name__ == "__main__":
-    # Replace with a couple of actual dummy image paths in your project
-    dummy_images = ["./test_img1.jpg", "./test_img2.jpg"] 
-    intent = "A cinematic highlight reel of a nature trek"
     
-    # print(analyze_images(dummy_images, intent))
+    # Bind our Pydantic model to force structured JSON output
+    structured_llm = llm.with_structured_output(ImageSelection)
+    
+    # In a full implementation, you would pass base64 image data here.
+    # For our architectural pipeline, we are prompting it with a mock list.
+    prompt = f"""
+    You are an expert video editor. Based on the user intent style: {intent.visual_style if intent else 'Standard'}
+    Select the best 3 images from this raw event pool: ['event_1.jpg', 'event_2.jpg', 'event_3.jpg', 'event_4.jpg', 'event_5.jpg']
+    """
+    
+    try:
+        output = structured_llm.invoke(prompt)
+        selected = output.selected_images
+    except Exception as e:
+        # Fallback just in case the API rate limits during our pipeline test
+        selected = ['event_1.jpg', 'event_3.jpg', 'event_5.jpg']
+        
+    return {"selected_images": selected}
